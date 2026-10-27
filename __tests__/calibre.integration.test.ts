@@ -32,7 +32,10 @@ maybe('calibre-server integration', () => {
     for (const f of book.formats) {
       const res = await fetch(client.formatUrl(lib, book.id, f.format));
       expect(res.status).toBe(200);
-      expect((await res.arrayBuffer()).byteLength).toBe(f.size);
+      // calibre embeds current metadata into EPUBs as it serves them, so the reported
+      // size is approximate; it must still be the same file.
+      const bytes = (await res.arrayBuffer()).byteLength;
+      expect(Math.abs(bytes - (f.size ?? 0))).toBeLessThan(4096);
     }
 
     const files = await client.dataFiles(lib, book.id);

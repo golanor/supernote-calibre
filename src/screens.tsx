@@ -38,11 +38,18 @@ export function SettingsScreen(props: {
   const [roots, setRoots] = useState<StorageRoot[]>([]);
   const [msg, setMsg] = useState<{text: string; error?: boolean} | null>(null);
   const [busy, setBusy] = useState(false);
+  // The address the current library choice was read from; Save needs it to match the field.
+  const [connectedUrl, setConnectedUrl] = useState(
+    props.initial.serverUrl && props.initial.library ? props.initial.serverUrl : '',
+  );
 
   useEffect(() => {
     getStorageRoots().then(r => {
       setRoots(r);
-      setS(prev => (prev.storageRoot ? prev : {...prev, storageRoot: r[0].root}));
+      // Fall back to the first root when the saved one (e.g. a removed SD card) is gone.
+      setS(prev =>
+        r.some(x => x.root === prev.storageRoot) ? prev : {...prev, storageRoot: r[0].root},
+      );
     });
   }, []);
 
@@ -61,6 +68,7 @@ export function SettingsScreen(props: {
         serverUrl: client.baseUrl,
         library: info.libraries.some(l => l.id === prev.library) ? prev.library : info.defaultLibrary,
       }));
+      setConnectedUrl(client.baseUrl);
       setMsg({text: `Connected: ${info.libraries.length} librar${info.libraries.length === 1 ? 'y' : 'ies'}`});
     } catch (e) {
       setMsg({text: errorText(e), error: true});
@@ -69,7 +77,8 @@ export function SettingsScreen(props: {
     }
   };
 
-  const canSave = !!(s.serverUrl && s.library && s.storageRoot && s.folder.trim());
+  const connected = !!s.serverUrl && s.serverUrl === connectedUrl;
+  const canSave = !!(connected && s.library && s.storageRoot && s.folder.trim());
 
   return (
     <ScrollView style={styles.screen} keyboardShouldPersistTaps="handled">
@@ -84,6 +93,9 @@ export function SettingsScreen(props: {
       />
       <Button label="Connect" onPress={connect} disabled={busy || !s.serverUrl.trim()} />
       <Message text={msg?.text ?? null} error={msg?.error} />
+      {!connected && !!s.serverUrl.trim() && !busy && (
+        <Message text="Tap Connect to check this address before saving." />
+      )}
 
       {libraries.length > 1 && (
         <>
@@ -144,9 +156,13 @@ export function LibraryScreen(props: {
   const [books, setBooks] = useState<Book[]>([]);
   const [msg, setMsg] = useState<{text: string; error?: boolean} | null>(null);
   const activeQuery = useRef('');
+  const latestRequest = useRef(0);
 
   const load = useCallback(
     async (q: string, off: number, srt: SortField) => {
+      // Only the most recent request may update the screen; slower older ones are dropped.
+      const request = ++latestRequest.current;
+      const isLatest = () => request === latestRequest.current;
       setMsg({text: 'Loading…'});
       try {
         const page = await client.search(settings.library, {
@@ -155,12 +171,18 @@ export function LibraryScreen(props: {
           num: PAGE_SIZE,
           sort: srt,
         });
-        setBooks(await client.books(settings.library, page.bookIds));
+        const found = await client.books(settings.library, page.bookIds);
+        if (!isLatest()) {
+          return;
+        }
+        setBooks(found);
         setTotal(page.total);
         setOffset(off);
         setMsg(page.total === 0 ? {text: 'No books found.'} : null);
       } catch (e) {
-        setMsg({text: errorText(e), error: true});
+        if (isLatest()) {
+          setMsg({text: errorText(e), error: true});
+        }
       }
     },
     [client, settings.library],
@@ -270,6 +292,7 @@ export function BookScreen(props: {
   const [progress, setProgress] = useState<{key: string; text: string} | null>(null);
   const [msg, setMsg] = useState<{text: string; error?: boolean} | null>(null);
   const handle = useRef<DownloadHandle | null>(null);
+  const busy = useRef(false);
 
   const formats: Item[] = book.formats.map(f => ({
     key: `fmt:${f.format}`,
@@ -314,18 +337,24 @@ export function BookScreen(props: {
   useEffect(() => () => handle.current?.cancel(), []);
 
   const start = async (item: Item) => {
-    setMsg(null);
-    const missing = await ensurePermissions([PERMISSIONS.internet, PERMISSIONS.write]);
-    if (missing.length) {
-      setMsg({text: `Permission not granted: ${missing.join(', ')}`, error: true});
+    // A ref, not state: a second tap before the next render must see the first one.
+    if (busy.current) {
       return;
     }
-    setProgress({key: item.key, text: 'Starting…'});
-    handle.current = download(item.url, dir, item.fileName, (received, total) => {
-      const pct = total > 0 ? ` (${Math.round((100 * received) / total)}%)` : '';
-      setProgress({key: item.key, text: `${formatSize(received)}${pct}`});
-    });
+    busy.current = true;
+    setMsg(null);
+    setProgress({key: item.key, text: 'Checking permissions…'});
     try {
+      const missing = await ensurePermissions([PERMISSIONS.internet, PERMISSIONS.write]);
+      if (missing.length) {
+        setMsg({text: `Permission not granted: ${missing.join(', ')}`, error: true});
+        return;
+      }
+      setProgress({key: item.key, text: 'Starting…'});
+      handle.current = download(item.url, dir, item.fileName, (received, total) => {
+        const pct = total > 0 ? ` (${Math.round((100 * received) / total)}%)` : '';
+        setProgress({key: item.key, text: `${formatSize(received)}${pct}`});
+      });
       const path = await handle.current.promise;
       setPresent(p => ({...p, [item.key]: true}));
       setMsg({text: `Saved to ${path}`});
@@ -333,6 +362,7 @@ export function BookScreen(props: {
       setMsg({text: `Download failed: ${errorText(e)}`, error: true});
     } finally {
       handle.current = null;
+      busy.current = false;
       setProgress(null);
     }
   };

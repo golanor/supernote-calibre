@@ -9,8 +9,8 @@ Built with React Native 0.79.2, the [Supernote plugin SDK](https://docs.supernot
 - Connect to `http://<host>:<port>`, with a library picker for multi-library servers.
 - Search with calibre's own syntax (`author:knuth`, `tags:physics`, `title:"…"`), sort by newest, title or author, and page through results with Prev/Next. There is no scrolling, which keeps the e-ink screen quiet.
 - Book page: every format with its size, plus the book's **data files** (calibre's per-book `data/` folder).
-- Downloads go to `<storage>/<folder>`. The default is `<SD card>/Document/Calibre`. Each download is written to a `.part` file and renamed when it finishes, so a cancelled download leaves nothing behind.
-- File names: `Title - First Author.ext` (characters that FAT/exFAT reject are replaced).
+- Downloads go to `<storage>/<folder>/<library>`. The default is `<SD card>/Document/Calibre/<library>`. Each download is written to a `.part` file and renamed when it finishes, so a cancelled download leaves nothing behind.
+- File names: `Title - First Author [id].ext` and `Title [id] - attachment.ext` for data files. The calibre id keeps books with the same title apart. Characters that FAT/exFAT reject are replaced, and long titles are shortened without touching the id or the extension.
 - Opens PDF, EPUB, CBZ, XPS and FB2 in the Supernote reader.
 
 ## calibre server setup

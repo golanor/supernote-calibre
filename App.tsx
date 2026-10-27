@@ -13,6 +13,7 @@ import {BookScreen, LibraryScreen, SettingsScreen} from './src/screens';
 import {Message, styles} from './src/ui';
 
 const LIFECYCLE_START = 2;
+const RECHECK_AFTER_MS = 3000;
 
 type Route = {name: 'loading'} | {name: 'settings'} | {name: 'library'} | {name: 'book'; book: Book};
 
@@ -29,11 +30,15 @@ function App(): React.JSX.Element {
       setSettings(s);
       setRoute(s.serverUrl && s.library && s.storageRoot ? {name: 'library'} : {name: 'settings'});
     });
-    // "Allow this time only" grants expire when the plugin closes: ask again on every open.
+    // "Allow this time only" grants expire when the plugin closes, so ask on mount and again
+    // whenever the plugin returns to the foreground. The start event can also arrive right
+    // after mount; skip it then so the user is never asked twice in a row.
+    let lastCheck = Date.now();
     ensurePermissions();
     const sub = PluginManager.registerPluginLifeListener({
       onMsg(msg: any) {
-        if (msg?.state === LIFECYCLE_START) {
+        if (msg?.state === LIFECYCLE_START && Date.now() - lastCheck > RECHECK_AFTER_MS) {
+          lastCheck = Date.now();
           ensurePermissions();
         }
       },
@@ -41,10 +46,13 @@ function App(): React.JSX.Element {
     return () => sub.remove();
   }, []);
 
-  const client = useMemo(
-    () => (settings?.serverUrl ? makeClient(settings.serverUrl) : null),
-    [settings?.serverUrl],
-  );
+  const client = useMemo(() => {
+    try {
+      return settings?.serverUrl ? makeClient(settings.serverUrl) : null;
+    } catch {
+      return null; // unusable address: the settings screen is shown instead
+    }
+  }, [settings?.serverUrl]);
 
   let body: React.ReactNode;
   if (route.name === 'loading' || !settings) {

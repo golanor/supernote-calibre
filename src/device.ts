@@ -3,7 +3,7 @@
 
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import {FileUtils, PluginFileAPI, PluginManager} from 'sn-plugin-lib';
-import {joinPath, storageRoots, type StorageRoot} from './paths';
+import {joinPath, sanitizeName, storageRoots, type StorageRoot} from './paths';
 
 export const PERMISSIONS = {
   internet: 'plugin.permission.INTERNET',
@@ -14,25 +14,36 @@ export const PERMISSIONS = {
 const GRANTED_NOW = 1;
 const GRANTED_ALWAYS = 2;
 
+function granted(status: number): boolean {
+  return status === GRANTED_NOW || status === GRANTED_ALWAYS;
+}
+
+// Permission checks run one at a time so overlapping callers never stack dialogs.
+let permissionQueue: Promise<unknown> = Promise.resolve();
+
 /**
  * Check and, if needed, request each permission. "Allow this time only" expires when the
  * plugin closes, so call this every time the plugin opens and before every download.
  * Returns the permissions that are still missing.
  */
-export async function ensurePermissions(
+export function ensurePermissions(
   wanted: string[] = Object.values(PERMISSIONS),
 ): Promise<string[]> {
-  const missing: string[] = [];
-  for (const p of wanted) {
-    if ((await PluginManager.hasPermission(p)) === GRANTED_NOW) {
-      continue;
+  const run = async () => {
+    const missing: string[] = [];
+    for (const p of wanted) {
+      if (granted(await PluginManager.hasPermission(p))) {
+        continue;
+      }
+      if (!granted(await PluginManager.requestPermission(p, describePermission(p)))) {
+        missing.push(p);
+      }
     }
-    const r = await PluginManager.requestPermission(p, describePermission(p));
-    if (r !== GRANTED_NOW && r !== GRANTED_ALWAYS) {
-      missing.push(p);
-    }
-  }
-  return missing;
+    return missing;
+  };
+  const result = permissionQueue.then(run, run);
+  permissionQueue = result.catch(() => undefined);
+  return result;
 }
 
 function describePermission(p: string): string {
@@ -99,8 +110,9 @@ export async function saveSettings(s: Settings): Promise<void> {
 
 // ---------- downloads
 
+/** `<root>/<folder>/<library>`: book ids are per library, so each library gets its own folder. */
 export function destinationDir(s: Settings): string {
-  return joinPath(s.storageRoot, s.folder);
+  return joinPath(s.storageRoot, s.folder, sanitizeName(s.library));
 }
 
 export async function fileExists(path: string): Promise<boolean> {
@@ -131,27 +143,41 @@ export function download(
   let task: ReturnType<ReturnType<typeof ReactNativeBlobUtil.config>['fetch']> | null = null;
   let cancelled = false;
 
+  const checkCancelled = () => {
+    if (cancelled) {
+      throw new Error('Cancelled');
+    }
+  };
+
   const promise = (async () => {
     if (!(await ReactNativeBlobUtil.fs.exists(dir))) {
       await ReactNativeBlobUtil.fs.mkdir(dir);
     }
-    task = ReactNativeBlobUtil.config({path: part, overwrite: true}).fetch('GET', url);
-    task.progress({interval: 750}, onProgress);
-    let res;
+    checkCancelled();
     try {
-      res = await task;
-    } catch (e: any) {
+      task = ReactNativeBlobUtil.config({path: part, overwrite: true}).fetch('GET', url);
+      task.progress({interval: 750}, onProgress);
+      let res;
+      try {
+        res = await task;
+      } catch (e: any) {
+        checkCancelled();
+        throw new Error(e?.message ?? String(e));
+      }
+      checkCancelled();
+      const status = res.info().status;
+      if (status !== 200) {
+        throw new Error(`Server answered HTTP ${status}`);
+      }
+      await removeQuietly(target);
+      if (!(await ReactNativeBlobUtil.fs.mv(part, target))) {
+        throw new Error(`Could not move the download into ${target}`);
+      }
+      return target;
+    } finally {
+      // After a successful move the .part file no longer exists; otherwise drop it.
       await removeQuietly(part);
-      throw new Error(cancelled ? 'Cancelled' : e?.message ?? String(e));
     }
-    const status = res.info().status;
-    if (status !== 200) {
-      await removeQuietly(part);
-      throw new Error(`Server answered HTTP ${status}`);
-    }
-    await removeQuietly(target);
-    await ReactNativeBlobUtil.fs.mv(part, target);
-    return target;
   })();
 
   return {
@@ -173,8 +199,16 @@ async function removeQuietly(path: string): Promise<void> {
   }
 }
 
+/** Open in the Supernote reader; the SDK reports failure in the response instead of throwing. */
 export async function openInReader(path: string): Promise<void> {
-  await PluginFileAPI.openFile(path, -1);
+  const res = (await PluginFileAPI.openFile(path, -1)) as {
+    success?: boolean;
+    result?: boolean;
+    error?: {message?: string};
+  } | null;
+  if (!res?.success || res.result === false) {
+    throw new Error(res?.error?.message ?? `Could not open ${path}`);
+  }
   await PluginManager.closePluginView();
 }
 

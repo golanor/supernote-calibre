@@ -17,29 +17,57 @@ export function extension(fileName: string): string {
   return dot > 0 ? fileName.slice(dot + 1).toLowerCase() : '';
 }
 
-/** Strip characters that FAT/exFAT SD cards reject, collapse whitespace, cap the length. */
-export function sanitizeName(name: string): string {
-  const cleaned = name
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^\.+/, '')
-    .replace(/[. ]+$/, '');
-  return (cleaned || 'untitled').slice(0, MAX_NAME).trim();
+function clean(name: string): string {
+  return (
+    name
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+  );
 }
 
-/** "Title - First Author.epub" */
+/** Drop leading dots and trailing dots/spaces, which FAT/exFAT reject or mangle. */
+function trimEnds(name: string): string {
+  return name.trim().replace(/^\.+/, '').replace(/[. ]+$/, '');
+}
+
+/** Strip characters that FAT/exFAT SD cards reject, collapse whitespace, cap the length. */
+export function sanitizeName(name: string, max = MAX_NAME): string {
+  // Truncate before trimming so a cut never leaves a trailing dot or space.
+  return trimEnds(trimEnds(clean(name)).slice(0, max)) || 'untitled';
+}
+
+/**
+ * `<prefix><suffix>.<ext>` within MAX_NAME: only the prefix is shortened, so the suffix
+ * (which makes the name unique) and the extension always survive.
+ */
+function composeName(prefix: string, suffix: string, ext: string): string {
+  const e = sanitizeName(ext, 10).toLowerCase();
+  const s = clean(suffix).slice(0, 60);
+  const tail = `${s}${e ? `.${e}` : ''}`;
+  return `${sanitizeName(prefix, Math.max(1, MAX_NAME - tail.length))}${tail}`;
+}
+
+function splitExt(name: string): [string, string] {
+  const ext = extension(name);
+  return ext ? [name.slice(0, -(ext.length + 1)), ext] : [name, ''];
+}
+
+/** "Title - First Author [12].epub"; the calibre id keeps same-titled books apart. */
 export function bookFileName(book: Book, format: string): string {
   const author = book.authors[0];
-  const stem = author ? `${book.title} - ${author}` : book.title;
-  return `${sanitizeName(stem)}.${format.toLowerCase()}`;
+  const prefix = author ? `${book.title} - ${author}` : book.title;
+  return composeName(prefix, ` [${book.id}]`, format);
 }
 
-/** Data files keep their own name, prefixed with the book title so they stay grouped. */
+/**
+ * "Title [12] - notes.pdf". `name` is the data file's path inside the book's data folder
+ * (e.g. "vol1/notes.pdf"); sub-folders become part of the name so files don't collide.
+ */
 export function dataFileName(book: Book, name: string): string {
-  return sanitizeName(`${book.title} - ${name}`);
+  const [stem, ext] = splitExt(name);
+  return composeName(book.title, ` [${book.id}] - ${trimEnds(clean(stem))}`, ext);
 }
 
 export function joinPath(...parts: string[]): string {

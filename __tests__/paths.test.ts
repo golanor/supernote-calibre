@@ -21,12 +21,33 @@ describe('file names', () => {
   it('keeps non-Latin titles', () => {
     expect(sanitizeName('ספר בעברית')).toBe('ספר בעברית');
   });
-  it('names books "Title - First Author.ext"', () => {
-    expect(bookFileName(book, 'EPUB')).toBe('Quantum_ Codes _ Errors_ - A. Kitaev.epub');
-    expect(bookFileName({...book, authors: []}, 'pdf')).toBe('Quantum_ Codes _ Errors_.pdf');
+  it('names books "Title - First Author [id].ext"', () => {
+    expect(bookFileName(book, 'EPUB')).toBe('Quantum_ Codes _ Errors_ - A. Kitaev [1].epub');
+    expect(bookFileName({...book, authors: []}, 'pdf')).toBe('Quantum_ Codes _ Errors_ [1].pdf');
   });
-  it('prefixes data files with the title', () => {
-    expect(dataFileName(book, 'notes.pdf')).toBe('Quantum_ Codes _ Errors_ - notes.pdf');
+  it('keeps same-titled books apart', () => {
+    const a = {id: 1, title: 'Collected Papers', authors: ['A. Author'], formats: []};
+    expect(bookFileName(a, 'pdf')).not.toBe(bookFileName({...a, id: 2}, 'pdf'));
+  });
+  it('names data files "Title [id] - name", keeping sub-folders distinct', () => {
+    expect(dataFileName(book, 'notes.pdf')).toBe('Quantum_ Codes _ Errors_ [1] - notes.pdf');
+    expect(dataFileName(book, 'vol1/notes.pdf')).not.toBe(dataFileName(book, 'vol2/notes.pdf'));
+  });
+  it('shortens only the title, never the id, attachment name or extension', () => {
+    const long = {...book, title: 'T'.repeat(300)};
+    const f = bookFileName(long, 'pdf');
+    expect(f.length).toBeLessThanOrEqual(120);
+    expect(f.endsWith(' [1].pdf')).toBe(true);
+    const d = dataFileName(long, 'appendix.pdf');
+    expect(d.length).toBeLessThanOrEqual(120);
+    expect(d.endsWith(' [1] - appendix.pdf')).toBe(true);
+    expect(isOpenable(d)).toBe(true);
+  });
+  it('never ends in a dot or space after truncation', () => {
+    const n = sanitizeName('a'.repeat(119) + '. ' + 'b'.repeat(10));
+    expect(n.endsWith('.')).toBe(false);
+    expect(n.endsWith(' ')).toBe(false);
+    expect(n.length).toBeLessThanOrEqual(120);
   });
   it('detects formats the reader can open', () => {
     expect(extension('a.b.PDF')).toBe('pdf');

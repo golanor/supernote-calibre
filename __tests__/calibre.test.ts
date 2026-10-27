@@ -111,6 +111,29 @@ describe('CalibreClient', () => {
     ]);
   });
 
+  it('keeps sub-folders in data file names', async () => {
+    const c = new CalibreClient(
+      'nas:8080',
+      fakeFetch({
+        '/interface-data/book-metadata/5?library_id=L': {
+          data_files: {'data/vol1/notes.pdf': {size: 1}, 'data/vol2/notes.pdf': {size: 2}},
+        },
+      }),
+    );
+    expect((await c.dataFiles('L', 5)).map(d => d.name)).toEqual(['vol1/notes.pdf', 'vol2/notes.pdf']);
+  });
+
+  it('reports a non-JSON 200 response as a CalibreError', async () => {
+    const c = new CalibreClient('nas:8080', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token <');
+      },
+    }));
+    await expect(c.libraryInfo()).rejects.toThrow(/did not return JSON/);
+  });
+
   it('builds download URLs with encoded path segments', () => {
     const c = new CalibreClient('nas:8080', fakeFetch({}));
     expect(c.formatUrl('My Library', 4, 'EPUB')).toBe('http://nas:8080/get/epub/4/My%20Library');

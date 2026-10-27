@@ -41,8 +41,8 @@ export interface Book {
 }
 
 export interface DataFile {
-  relpath: string; // e.g. "data/notes.pdf"
-  name: string; // basename
+  relpath: string; // e.g. "data/vol1/notes.pdf"
+  name: string; // path inside the data folder, e.g. "vol1/notes.pdf"
   size: number | null;
 }
 
@@ -97,7 +97,11 @@ export class CalibreClient {
       const hint = res.status === 401 ? ' (the server requires a login)' : '';
       throw new CalibreError(`HTTP ${res.status} for ${path}${hint}`, res.status);
     }
-    return res.json();
+    try {
+      return await res.json();
+    } catch {
+      throw new CalibreError(`${this.baseUrl}${path} did not return JSON; is this a calibre server?`);
+    }
   }
 
   async libraryInfo(): Promise<LibraryInfo> {
@@ -154,7 +158,7 @@ export class CalibreClient {
     return Object.entries(files)
       .map(([relpath, stat]) => ({
         relpath,
-        name: relpath.split('/').pop() ?? relpath,
+        name: relpath.replace(/^data\//, ''),
         size: typeof stat?.size === 'number' ? stat.size : null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
