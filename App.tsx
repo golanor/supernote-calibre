@@ -1,71 +1,98 @@
 /**
- * Simple Plugin
+ * Plugin UI: settings → library list → book page.
  *
  * @format
  */
 
-import React from 'react';
-import {
-  StatusBar,
-  StyleSheet,
-  Text,
-  useColorScheme,
-  View,
-  Pressable,
-} from 'react-native';
-import { PluginManager } from 'sn-plugin-lib';
+import React, {useEffect, useMemo, useState} from 'react';
+import {StatusBar, View} from 'react-native';
+import {PluginManager} from 'sn-plugin-lib';
+import {CalibreClient, type Book} from './src/calibre';
+import {closePlugin, ensurePermissions, loadSettings, saveSettings, type Settings} from './src/device';
+import {BookScreen, LibraryScreen, SettingsScreen} from './src/screens';
+import {Message, styles} from './src/ui';
 
-/**
- * Plugin View
- * Displays Hello World text in the center of the screen
- */
+const LIFECYCLE_START = 2;
+
+type Route = {name: 'loading'} | {name: 'settings'} | {name: 'library'} | {name: 'book'; book: Book};
+
+function makeClient(url: string): CalibreClient {
+  return new CalibreClient(url, (u, init) => fetch(u, init));
+}
+
 function App(): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [route, setRoute] = useState<Route>({name: 'loading'});
 
-  const handleClose = () => {
-    PluginManager.closePluginView();
-  };
+  useEffect(() => {
+    loadSettings().then(s => {
+      setSettings(s);
+      setRoute(s.serverUrl && s.library && s.storageRoot ? {name: 'library'} : {name: 'settings'});
+    });
+    // "Allow this time only" grants expire when the plugin closes: ask again on every open.
+    ensurePermissions();
+    const sub = PluginManager.registerPluginLifeListener({
+      onMsg(msg: any) {
+        if (msg?.state === LIFECYCLE_START) {
+          ensurePermissions();
+        }
+      },
+    });
+    return () => sub.remove();
+  }, []);
+
+  const client = useMemo(
+    () => (settings?.serverUrl ? makeClient(settings.serverUrl) : null),
+    [settings?.serverUrl],
+  );
+
+  let body: React.ReactNode;
+  if (route.name === 'loading' || !settings) {
+    body = (
+      <View style={styles.screen}>
+        <Message text="Loading…" />
+      </View>
+    );
+  } else if (route.name === 'settings' || !client) {
+    body = (
+      <SettingsScreen
+        initial={settings}
+        makeClient={makeClient}
+        onCancel={client ? () => setRoute({name: 'library'}) : undefined}
+        onSave={async s => {
+          await saveSettings(s);
+          setSettings(s);
+          setRoute({name: 'library'});
+        }}
+      />
+    );
+  } else if (route.name === 'book') {
+    body = (
+      <BookScreen
+        client={client}
+        settings={settings}
+        book={route.book}
+        onBack={() => setRoute({name: 'library'})}
+      />
+    );
+  } else {
+    body = (
+      <LibraryScreen
+        client={client}
+        settings={settings}
+        onOpenBook={book => setRoute({name: 'book', book})}
+        onSettings={() => setRoute({name: 'settings'})}
+        onClose={closePlugin}
+      />
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <Pressable style={styles.closeButton} onPress={handleClose}>
-        <Text style={[styles.closeText, {color: isDarkMode ? '#ffffff' : '#000000'}]}>✕</Text>
-      </Pressable>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={isDarkMode ? '#000000' : '#ffffff'}
-      />
-      <Text style={[styles.helloText, {color: isDarkMode ? '#ffffff' : '#000000'}]}>
-        Hello World
-      </Text>
+    <View style={styles.root}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      {body}
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-  },
-  closeButton: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  closeText: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  helloText: {
-    fontSize: 24,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-});
 
 export default App;
