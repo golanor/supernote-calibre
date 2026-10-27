@@ -169,10 +169,7 @@ export function download(
       if (status !== 200) {
         throw new Error(`Server answered HTTP ${status}`);
       }
-      await removeQuietly(target);
-      if (!(await ReactNativeBlobUtil.fs.mv(part, target))) {
-        throw new Error(`Could not move the download into ${target}`);
-      }
+      await commit(part, target);
       return target;
     } finally {
       // After a successful move the .part file no longer exists; otherwise drop it.
@@ -187,6 +184,32 @@ export function download(
       task?.cancel();
     },
   };
+}
+
+/**
+ * Move the finished `.part` file onto `target` without losing an existing copy: the old
+ * file is set aside as `.old` and restored if the move fails. blob-util's `mv` rejects on
+ * failure; on Android it resolves with no value on success, so its result is not checked.
+ */
+async function commit(part: string, target: string): Promise<void> {
+  const fs = ReactNativeBlobUtil.fs;
+  const backup = `${target}.old`;
+  const hadOld = await fs.exists(target);
+  if (hadOld) {
+    await removeQuietly(backup);
+    await fs.mv(target, backup);
+  }
+  try {
+    await fs.mv(part, target);
+  } catch (e: any) {
+    if (hadOld) {
+      await fs.mv(backup, target).catch(() => undefined);
+    }
+    throw new Error(`Could not save ${target}: ${e?.message ?? e}`);
+  }
+  if (hadOld) {
+    await removeQuietly(backup);
+  }
 }
 
 async function removeQuietly(path: string): Promise<void> {

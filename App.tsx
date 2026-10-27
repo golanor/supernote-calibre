@@ -8,7 +8,14 @@ import React, {useEffect, useMemo, useState} from 'react';
 import {StatusBar, View} from 'react-native';
 import {PluginManager} from 'sn-plugin-lib';
 import {CalibreClient, type Book} from './src/calibre';
-import {closePlugin, ensurePermissions, loadSettings, saveSettings, type Settings} from './src/device';
+import {
+  closePlugin,
+  ensurePermissions,
+  getStorageRoots,
+  loadSettings,
+  saveSettings,
+  type Settings,
+} from './src/device';
 import {BookScreen, LibraryScreen, SettingsScreen} from './src/screens';
 import {Message, styles} from './src/ui';
 
@@ -26,15 +33,18 @@ function App(): React.JSX.Element {
   const [route, setRoute] = useState<Route>({name: 'loading'});
 
   useEffect(() => {
-    loadSettings().then(s => {
-      setSettings(s);
-      setRoute(s.serverUrl && s.library && s.storageRoot ? {name: 'library'} : {name: 'settings'});
-    });
-    // "Allow this time only" grants expire when the plugin closes, so ask on mount and again
-    // whenever the plugin returns to the foreground. The start event can also arrive right
-    // after mount; skip it then so the user is never asked twice in a row.
+    // "Allow this time only" grants expire when the plugin closes, so ask on mount (before
+    // the library's first request) and again whenever the plugin returns to the foreground.
+    // The start event can also arrive right after mount; skip it then so the user is never
+    // asked twice in a row.
     let lastCheck = Date.now();
-    ensurePermissions();
+    Promise.all([loadSettings(), getStorageRoots(), ensurePermissions()]).then(([s, roots]) => {
+      setSettings(s);
+      // A saved root that is no longer mounted (SD card removed) sends the user to settings,
+      // which falls back to an available root.
+      const ready = s.serverUrl && s.library && roots.some(r => r.root === s.storageRoot);
+      setRoute(ready ? {name: 'library'} : {name: 'settings'});
+    });
     const sub = PluginManager.registerPluginLifeListener({
       onMsg(msg: any) {
         if (msg?.state === LIFECYCLE_START && Date.now() - lastCheck > RECHECK_AFTER_MS) {

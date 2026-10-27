@@ -6,7 +6,11 @@ import type {Book} from './calibre';
 export const OPENABLE_FORMATS = new Set(['pdf', 'epub', 'cbz', 'xps', 'fb2']);
 
 const INTERNAL_ROOT = '/storage/emulated/0';
-const MAX_NAME = 120;
+// Internal storage allows 255 bytes per name and exFAT 255 UTF-16 units. 200 UTF-8 bytes
+// fits both, with room for the ".part" and ".old" names used while downloading.
+const MAX_BYTES = 200;
+const MAX_SUFFIX_BYTES = 140;
+const MAX_LABEL_BYTES = 100;
 
 export function isOpenable(fileName: string): boolean {
   return OPENABLE_FORMATS.has(extension(fileName));
@@ -32,21 +36,58 @@ function trimEnds(name: string): string {
   return name.trim().replace(/^\.+/, '').replace(/[. ]+$/, '');
 }
 
+/** Length in UTF-8 bytes. */
+export function utf8Length(s: string): number {
+  let n = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    n += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
+
+/** Longest prefix of whole characters that fits in `maxBytes` UTF-8 bytes. */
+function truncateBytes(s: string, maxBytes: number): string {
+  let out = '';
+  let n = 0;
+  for (const ch of s) {
+    n += utf8Length(ch);
+    if (n > maxBytes) {
+      break;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function trimRight(s: string): string {
+  return s.replace(/[. ]+$/, '');
+}
+
+/** Short stable hash (FNV-1a, base 36) to tell apart names that sanitizing made equal. */
+function shortHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    // eslint-disable-next-line no-bitwise
+    h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
+  }
+  return h.toString(36).padStart(7, '0');
+}
+
 /** Strip characters that FAT/exFAT SD cards reject, collapse whitespace, cap the length. */
-export function sanitizeName(name: string, max = MAX_NAME): string {
+export function sanitizeName(name: string, maxBytes = MAX_BYTES): string {
   // Truncate before trimming so a cut never leaves a trailing dot or space.
-  return trimEnds(trimEnds(clean(name)).slice(0, max)) || 'untitled';
+  return trimEnds(truncateBytes(trimEnds(clean(name)), maxBytes)) || 'untitled';
 }
 
 /**
- * `<prefix><suffix>.<ext>` within MAX_NAME: only the prefix is shortened, so the suffix
- * (which makes the name unique) and the extension always survive.
+ * `<prefix><suffix>.<ext>` within MAX_BYTES: only the prefix is shortened, so the suffix
+ * (which makes the name unique) and the extension survive.
  */
 function composeName(prefix: string, suffix: string, ext: string): string {
-  const e = sanitizeName(ext, 10).toLowerCase();
-  const s = clean(suffix).slice(0, 60);
-  const tail = `${s}${e ? `.${e}` : ''}`;
-  return `${sanitizeName(prefix, Math.max(1, MAX_NAME - tail.length))}${tail}`;
+  const e = ext ? sanitizeName(ext, 16).toLowerCase() : '';
+  const tail = `${trimRight(truncateBytes(suffix, MAX_SUFFIX_BYTES))}${e ? `.${e}` : ''}`;
+  return `${sanitizeName(prefix, MAX_BYTES - utf8Length(tail))}${tail}`;
 }
 
 function splitExt(name: string): [string, string] {
@@ -63,11 +104,16 @@ export function bookFileName(book: Book, format: string): string {
 
 /**
  * "Title [12] - notes.pdf". `name` is the data file's path inside the book's data folder
- * (e.g. "vol1/notes.pdf"); sub-folders become part of the name so files don't collide.
+ * (e.g. "vol1/notes.pdf"). When sanitizing or shortening changes the name, a hash of the
+ * original path is added, so "vol1/notes.pdf" and "vol1_notes.pdf" stay distinct.
  */
 export function dataFileName(book: Book, name: string): string {
   const [stem, ext] = splitExt(name);
-  return composeName(book.title, ` [${book.id}] - ${trimEnds(clean(stem))}`, ext);
+  let label = trimEnds(clean(stem));
+  if (label !== stem || utf8Length(label) > MAX_LABEL_BYTES) {
+    label = `${trimRight(truncateBytes(label, MAX_LABEL_BYTES))} ~${shortHash(name)}`.trim();
+  }
+  return composeName(book.title, ` [${book.id}] - ${label}`, ext);
 }
 
 export function joinPath(...parts: string[]): string {

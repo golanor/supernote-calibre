@@ -89,6 +89,33 @@ it('LibraryScreen ignores responses that arrive after a newer request', async ()
   await act(async () => r.unmount());
 });
 
+it('LibraryScreen clears old results when a new request fails', async () => {
+  const client = {
+    search: jest
+      .fn()
+      .mockResolvedValueOnce({total: 1, offset: 0, bookIds: [1]})
+      .mockRejectedValueOnce(new Error('HTTP 500')),
+    books: jest.fn(async (_lib: string, ids: number[]) => ids.map(id => book(id))),
+  } as unknown as CalibreClient;
+  let r!: ReactTestRenderer.ReactTestRenderer;
+  await act(async () => {
+    r = ReactTestRenderer.create(
+      <LibraryScreen
+        client={client}
+        settings={settings}
+        onOpenBook={() => {}}
+        onSettings={() => {}}
+        onClose={() => {}}
+      />,
+    );
+  });
+  expect(texts(r)).toContain('Book 1');
+  await act(async () => pressButton(r, 'Title'));
+  expect(texts(r)).not.toContain('Book 1');
+  expect(texts(r)).toContain('HTTP 500');
+  await act(async () => r.unmount());
+});
+
 it('BookScreen starts only one download for a double tap', async () => {
   const perm = deferred<string[]>();
   mockDevice.ensurePermissions.mockReturnValue(perm.promise);
@@ -120,7 +147,13 @@ describe('SettingsScreen', () => {
     const onSave = jest.fn();
     const client = {
       baseUrl: 'http://other:8080',
-      libraryInfo: jest.fn(async () => ({libraries: [{id: 'X', name: 'X'}], defaultLibrary: 'X'})),
+      libraryInfo: jest.fn(async () => ({
+        libraries: [
+          {id: 'X', name: 'X'},
+          {id: 'L', name: 'L'},
+        ],
+        defaultLibrary: 'X',
+      })),
     };
     let r!: ReactTestRenderer.ReactTestRenderer;
     await act(async () => {
@@ -130,6 +163,11 @@ describe('SettingsScreen', () => {
     });
     return {r, onSave};
   };
+
+  it('lists the libraries when opened with a working configuration', async () => {
+    const {r} = await render();
+    expect(texts(r)).toContain('Library');
+  });
 
   it('replaces a saved storage root that no longer exists (removed SD card)', async () => {
     const {r, onSave} = await render({...settings, storageRoot: '/storage/GONE-0000'});
@@ -146,7 +184,7 @@ describe('SettingsScreen', () => {
     await act(async () => pressButton(r, 'Connect'));
     await act(async () => pressButton(r, 'Save'));
     expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({serverUrl: 'http://other:8080', library: 'X'}),
+      expect.objectContaining({serverUrl: 'http://other:8080', library: 'L'}),
     );
   });
 });

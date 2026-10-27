@@ -57,7 +57,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockFs.exists.mockResolvedValue(false);
   mockFs.mkdir.mockResolvedValue(undefined);
-  mockFs.mv.mockResolvedValue(true);
+  // Android's mv resolves with no value on success and rejects on failure.
+  mockFs.mv.mockResolvedValue(undefined);
   mockFs.unlink.mockResolvedValue(undefined);
 });
 
@@ -99,12 +100,49 @@ describe('download', () => {
     expect(mockFs.unlink).toHaveBeenCalledWith('/d/a.pdf.part');
 
     mockFs.unlink.mockClear();
-    mockFs.mv.mockResolvedValue(false);
+    mockFs.mv.mockRejectedValue(new Error('mv failed for unknown reasons'));
     mockFetch.mockReturnValue(fakeTask(Promise.resolve({info: () => ({status: 200})})));
     await expect(download('http://s/x', '/d', 'a.pdf', () => {}).promise).rejects.toThrow(
-      'Could not move',
+      'Could not save',
     );
     expect(mockFs.unlink).toHaveBeenCalledWith('/d/a.pdf.part');
+  });
+
+  it('keeps the existing copy when replacing it fails', async () => {
+    // Existing target and a finished .part; moving the .part into place fails.
+    const files = new Set(['/d/a.pdf']);
+    mockFs.exists.mockImplementation(async (p: string) => files.has(p) || p === '/d');
+    mockFs.unlink.mockImplementation(async (p: string) => {
+      files.delete(p);
+    });
+    mockFs.mv.mockImplementation(async (from: string, to: string) => {
+      if (from.endsWith('.part')) {
+        throw new Error('mv failed for unknown reasons');
+      }
+      files.delete(from);
+      files.add(to);
+    });
+    mockFetch.mockReturnValue(fakeTask(Promise.resolve({info: () => ({status: 200})})));
+    await expect(download('http://s/x', '/d', 'a.pdf', () => {}).promise).rejects.toThrow(
+      'Could not save',
+    );
+    expect(files.has('/d/a.pdf')).toBe(true);
+    expect(files.has('/d/a.pdf.old')).toBe(false);
+  });
+
+  it('replaces an existing copy and removes the backup', async () => {
+    const files = new Set(['/d/a.pdf', '/d/a.pdf.part']);
+    mockFs.exists.mockImplementation(async (p: string) => files.has(p) || p === '/d');
+    mockFs.unlink.mockImplementation(async (p: string) => {
+      files.delete(p);
+    });
+    mockFs.mv.mockImplementation(async (from: string, to: string) => {
+      files.delete(from);
+      files.add(to);
+    });
+    mockFetch.mockReturnValue(fakeTask(Promise.resolve({info: () => ({status: 200})})));
+    expect(await download('http://s/x', '/d', 'a.pdf', () => {}).promise).toBe('/d/a.pdf');
+    expect([...files]).toEqual(['/d/a.pdf']);
   });
 });
 

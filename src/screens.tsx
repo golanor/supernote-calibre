@@ -51,6 +51,20 @@ export function SettingsScreen(props: {
         r.some(x => x.root === prev.storageRoot) ? prev : {...prev, storageRoot: r[0].root},
       );
     });
+    // Already configured: list the server's libraries so the choice can be changed
+    // without reconnecting. Failures are silent; Connect reports them.
+    if (connectedUrl) {
+      try {
+        props
+          .makeClient(connectedUrl)
+          .libraryInfo()
+          .then(info => setLibraries(info.libraries))
+          .catch(() => undefined);
+      } catch {
+        // unusable saved address
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const connect = async () => {
@@ -181,6 +195,10 @@ export function LibraryScreen(props: {
         setMsg(page.total === 0 ? {text: 'No books found.'} : null);
       } catch (e) {
         if (isLatest()) {
+          // Don't leave the previous results on screen under an error for a new request.
+          setBooks([]);
+          setTotal(0);
+          setOffset(0);
           setMsg({text: errorText(e), error: true});
         }
       }
