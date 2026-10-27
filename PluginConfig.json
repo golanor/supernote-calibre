@@ -1,0 +1,16 @@
+{
+  "name": "calibre",
+  "desc": "Browse a calibre Content Server on your network and download books and data files to the SD card",
+  "author": "Or Golan",
+  "iconPath": "assets/icon.png",
+  "versionName": "0.1.0",
+  "versionCode": "1",
+  "pluginID": "xrbpk1oryvgk4g6s",
+  "pluginKey": "SupernoteCalibre",
+  "jsMainPath": "index",
+  "uses-permissions": [
+    "plugin.permission.INTERNET",
+    "plugin.permission.FILE:READ",
+    "plugin.permission.FILE:WRITE"
+  ]
+}
